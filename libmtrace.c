@@ -156,10 +156,12 @@ static void init()
         }
     }
 
+    thread_use++;
+
     real_malloc   = dlsym(RTLD_NEXT, "malloc");
-    real_free     = dlsym(RTLD_NEXT, "free");
     real_calloc   = dlsym(RTLD_NEXT, "calloc");
     real_realloc  = dlsym(RTLD_NEXT, "realloc");
+    real_free     = dlsym(RTLD_NEXT, "free");
     real_memalign = dlsym(RTLD_NEXT, "memalign");
 
     if (!real_malloc || !real_free || !real_calloc || !real_realloc || !real_memalign)
@@ -169,6 +171,8 @@ static void init()
     }
 
     __atomic_store_n(&init_completed, 1, __ATOMIC_SEQ_CST);
+
+    thread_use--;
 }
 
 void* malloc(size_t size)
@@ -202,10 +206,25 @@ void* realloc(void* ptr, size_t size)
     return new_ptr;
 }
 
+// Workaround: on my laptop, loading a c++ app dsym during init() seems to require 1 calloc
+#define BOOTSTRAP_BUT_SIZE  1000
+static char bootup_buf[BOOTSTRAP_BUT_SIZE];
 void* calloc(size_t nmemb, size_t size)
 {
     if (real_calloc == NULL)
+    {
+        if (thread_use > 0)
+        {
+            log_message("## Warning boostrap call calloc(%lu, %lu)\n", nmemb, size);
+            if (nmemb*size > BOOTSTRAP_BUT_SIZE)
+            {
+                log_message("## Error: not enough memory\n");
+                exit(1);
+            }
+            return bootup_buf;
+        }
         init();
+    }
 
     void* ptr = real_calloc(nmemb, size);
 
