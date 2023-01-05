@@ -2,15 +2,6 @@
 //
 // Trace all memory [/re/de]-allocations showing also a backtrace.
 //
-// Idea taken from: https://stackoverflow.com/questions/6083337/overriding-malloc-using-the-ld-preload-mechanism
-//
-// Intended to work with multithreaded apps, but untested.
-// Requires GCC.
-//
-// Use:
-//   LD_PRELOAD=./libmtrace.so /bin/pwd
-//
-// Output to stderr or set MTRACE_OUT to write to a file.
 
 #define _GNU_SOURCE
 #include <dlfcn.h>
