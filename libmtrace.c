@@ -219,7 +219,7 @@ void* calloc(size_t nmemb, size_t size)
 
     void* ptr = real_calloc(nmemb, size);
 
-    print_backtrace("calloc(%lu, %lu)\n", nmemb, size);
+    print_backtrace("calloc(%lu, %lu) = %p\n", nmemb, size, ptr);
     return ptr;
 }
 
