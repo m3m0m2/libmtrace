@@ -58,6 +58,11 @@ def error(line):
     print(line)
     sys.exit(1)
 
+def printHeader(s):
+    n=len(s)
+    l='#'*(n+2)
+    print("{0}\n# {1}\n{0}\n".format('#'*(n+2), s))
+
 class ParsingStatus(Enum):
     READY=0
     THREAD=1
@@ -68,14 +73,11 @@ class ParsingStatus(Enum):
 
 backtraces = {}
 mallocs = {}
+membt = {}
 
 def parse():
-    print("# Parsing")
+    printHeader("Parsing")
     status = ParsingStatus.READY
-    thread_id = None
-    method = None
-    allocSize = 0
-    currentBackTrace = ''
 
     for line in fileinput.input():
         line = line.rstrip()
@@ -83,6 +85,7 @@ def parse():
             thread_id = None
             method = None
             allocSize = 0
+            address = None
             currentBackTrace = ''
             status = ParsingStatus.THREAD
         elif len(line) == 0 or line[0] == ' ' or line[0] == '-':
@@ -93,6 +96,7 @@ def parse():
             if len(m) < 1:
                 sys.exit(1)
             thread_id = m[0]
+            currentBackTrace += 'Thread {0}'.format(thread_id)
             status = ParsingStatus.METHOD
         elif status == ParsingStatus.METHOD:
             status = ParsingStatus.BACKTRACE_START
@@ -102,6 +106,7 @@ def parse():
                 allocSize = match.group(1)
                 print("matched malloc {0} {1}".format(match.group(1), match.group(2)))
                 mallocs[match.group(2)] = match.group(1)
+                address = match.group(2)
                 continue
             match = re.search(r"^free\((.*)\)$", line)
             if match:
@@ -114,6 +119,8 @@ def parse():
                     allocSize = '???'
                 print("matched free {0}".format(match.group(1)))
                 mallocs[match.group(1)] = '***ALREADY_FREED**'
+                if match.group(1) in membt:
+                    del membt[match.group(1)]
                 continue
             match = re.search(r"^realloc\((.*), (\d*)\) = (.*)$", line)
             if match:
@@ -123,6 +130,9 @@ def parse():
                 mallocs[match.group(3)] = match.group(2)
                 if match.group(1) != match.group(3):
                     mallocs[match.group(1)] = '***ALREADY_REALLOCED***'
+                if match.group(1) in membt:
+                    del membt[match.group(1)]
+                address = match.group(3)
                 continue
             match = re.search(r"^calloc\((\d*), (\d*)\) = (.*)$", line)
             if match:
@@ -131,11 +141,11 @@ def parse():
                 print("matched calloc {0} {1} {2}".format(match.group(1),
                     match.group(2), match.group(3)))
                 mallocs[match.group(3)] = allocSize
+                address = match.group(3)
                 continue
             error('Unexpected line {0}: '.format(line))
         elif status == ParsingStatus.BACKTRACE_START:
             assert(line == '[')
-            currentBackTrace = ''
             status = ParsingStatus.BACKTRACE
         elif status == ParsingStatus.BACKTRACE:
             if line == ']':
@@ -144,6 +154,8 @@ def parse():
                             'free': list(), 'realloc': list(), 'calloc': list()}
                 backtraces[currentBackTrace]['count'] += 1
                 backtraces[currentBackTrace][method].append(allocSize)
+                if address is not None:
+                    membt[address] = currentBackTrace
                 status = ParsingStatus.READY
             else:
                 bt = BacktraceLine(line)
@@ -155,7 +167,7 @@ def parse():
     print()
 
 def summary():
-    print("# Backtraces")
+    printHeader("Backtraces")
     for backtrace in dict(sorted(backtraces.items(), key=lambda item: item[1]['count'])):
         print("backtrace:\n{0}".format(backtrace))
         stats = backtraces[backtrace]
@@ -166,10 +178,12 @@ def summary():
                 print("{0}: {1}".format(method, stats[method]))
         print()
 
-    print("# Memory not released:\n   Address     Size")
+    printHeader("Memory not released")
     for key, value in mallocs.items():
         if len(value) > 0 and value[0] != '*':
+            print("   Address     Size")
             print("{0} {1}".format(key, value))
+            print("\nbacktrace:\n{0}\n".format(membt[key]))
 
 if __name__ == '__main__':
     parse()
