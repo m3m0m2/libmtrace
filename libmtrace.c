@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <execinfo.h>
 #include <fcntl.h>
+#include <malloc.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,8 @@ static void* (*real_malloc)(size_t size) = NULL;
 static void  (*real_free)(void* ptr) = NULL;
 static void* (*real_realloc)(void* ptr, size_t size) = NULL;
 static void* (*real_memalign)(size_t blocksize, size_t bytes) = NULL;
+// Ignoring obsolete methods like: valloc, pvalloc, (memalign is also obsolete)
+// TODO: consider adding aligned_alloc and posix_memalign (if have weak symbol)
 
 static int init_started = 0, init_completed = 0;
 
@@ -61,6 +64,26 @@ static void log_message_v(const char *fmt, va_list* ap)
     vsnprintf(log_buffer, LOG_BUFFER_SIZE, fmt, *ap);
     // Using write avoids *printf recursion
     write(log_fd, log_buffer, strlen(log_buffer));
+}
+
+static void display_mallinfo()
+{
+    struct mallinfo mi;
+
+    mi = mallinfo();
+
+    log_message(" MALLINFO STATS\n");
+    log_message(" ==============\n");
+    log_message(" Total non-mmapped bytes (arena):       %d\n", mi.arena);
+    log_message(" Num of free chunks (ordblks):          %d\n", mi.ordblks);
+    log_message(" Num of free fastbin blocks (smblks):   %d\n", mi.smblks);
+    log_message(" Num of mapped regions (hblks):         %d\n", mi.hblks);
+    log_message(" Bytes in mapped regions (hblkhd):      %d\n", mi.hblkhd);
+    log_message(" Max. total allocated space (usmblks):  %d\n", mi.usmblks);
+    log_message(" Free bytes held in fastbins (fsmblks): %d\n", mi.fsmblks);
+    log_message(" Total allocated space (uordblks):      %d\n", mi.uordblks);
+    log_message(" Total free space (fordblks):           %d\n", mi.fordblks);
+    log_message(" Topmost releasable block (keepcost):   %d\n", mi.keepcost);
 }
 
 static void print_backtrace(const char* fmt, ...)
@@ -162,6 +185,12 @@ static void init()
     }
 
     __atomic_store_n(&init_completed, 1, __ATOMIC_SEQ_CST);
+
+    if (atexit(display_mallinfo) != 0)
+    {
+        log_message("Error failed call to atexit()\n");
+        exit(1);
+    }
 
     thread_use--;
 }
