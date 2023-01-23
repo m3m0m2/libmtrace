@@ -76,6 +76,7 @@ mallocs = {}
 membt = {}
 
 def parse():
+    comments = []
     printHeader("Parsing")
     status = ParsingStatus.READY
 
@@ -88,17 +89,20 @@ def parse():
             address = None
             currentBackTrace = ''
             status = ParsingStatus.THREAD
-        elif len(line) == 0 or line[0] == ' ' or line[0] == '-':
+        if len(line) == 0 or line[0] == ' ' or line[0] == '-' or line[0] == '#':
+            if len(line) > 1:
+                comments.append(line)
             continue
         elif status == ParsingStatus.THREAD:
-            assert(line.startswith('# Thread: '))
+            assert(line.startswith('* '))
             m = re.findall(r'\d+', line)
             if len(m) < 1:
                 sys.exit(1)
             thread_id = m[0]
             currentBackTrace += 'Thread {0}'.format(thread_id)
+            line = line[3+len(m[0]):]
             status = ParsingStatus.METHOD
-        elif status == ParsingStatus.METHOD:
+            #elif status == ParsingStatus.METHOD:
             status = ParsingStatus.BACKTRACE_START
             match = re.search(r"^malloc\((\d*)\) = (.*)$", line)
             if match:
@@ -137,8 +141,35 @@ def parse():
             match = re.search(r"^calloc\((\d*), (\d*)\) = (.*)$", line)
             if match:
                 method = 'calloc'
-                allocSize = str(int(match.group(1)) * int(match.group(2)))
+                allocSize = int(match.group(1)) * int(match.group(2))
                 print("matched calloc {0} {1} {2}".format(match.group(1),
+                    match.group(2), match.group(3)))
+                mallocs[match.group(3)] = allocSize
+                address = match.group(3)
+                continue
+            match = re.search(r"^aligned_alloc\((\d*), (\d*)\) = (.*)$", line)
+            if match:
+                method = 'aligned_alloc'
+                allocSize = int(match.group(2))
+                print("matched aligned_alloc {0} {1} {2}".format(match.group(1),
+                    match.group(2), match.group(3)))
+                mallocs[match.group(3)] = allocSize
+                address = match.group(3)
+                continue
+            match = re.search(r"^posix_memalign\((\d*), (\d*)\) = (.*)$", line)
+            if match:
+                method = 'posix_memalign'
+                allocSize = int(match.group(2))
+                print("matched posix_memalign {0} {1} {2}".format(match.group(1),
+                    match.group(2), match.group(3)))
+                mallocs[match.group(3)] = allocSize
+                address = match.group(3)
+                continue
+            match = re.search(r"^memalign\((\d*), (\d*)\) = (.*)$", line)
+            if match:
+                method = 'memalign'
+                allocSize = int(match.group(2))
+                print("matched memalign {0} {1} {2}".format(match.group(1),
                     match.group(2), match.group(3)))
                 mallocs[match.group(3)] = allocSize
                 address = match.group(3)
@@ -151,7 +182,9 @@ def parse():
             if line == ']':
                 if not currentBackTrace in backtraces:
                     backtraces[currentBackTrace] = {'count': 0, 'malloc': list(),
-                            'free': list(), 'realloc': list(), 'calloc': list()}
+                            'free': list(), 'realloc': list(), 'calloc': list(),
+                            'aligned_alloc': list(), 'posix_memalign': list(),
+                            'memalign': list() }
                 backtraces[currentBackTrace]['count'] += 1
                 backtraces[currentBackTrace][method].append(allocSize)
                 if address is not None:
@@ -166,16 +199,22 @@ def parse():
                 currentBackTrace += bt.toString()
     print()
 
+    printHeader("Comments")
+    for line in comments:
+        print(line)
+    print()
+
 def summary():
     printHeader("Backtraces")
     for backtrace in dict(sorted(backtraces.items(), key=lambda item: item[1]['count'])):
-        print("backtrace:\n{0}".format(backtrace))
+        print("{0}".format(backtrace))
         stats = backtraces[backtrace]
-        print("stats:")
-        print("calls: {0}".format(stats['count']))
-        for method in ('malloc', 'free', 'realloc', 'calloc'):
+        print("* Calls: {0}".format(stats['count']))
+        for method in sorted(stats):
+            if method == 'count':
+                continue
             if len(stats[method]) > 0:
-                print("{0}: {1}".format(method, stats[method]))
+                print("  {0}: {1}".format(method, stats[method]))
         print()
 
     printHeader("Memory not released")
