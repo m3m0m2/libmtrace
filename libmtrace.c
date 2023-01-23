@@ -3,7 +3,10 @@
 // Trace all memory [/re/de]-allocations showing also a backtrace.
 //
 
+#include "config.h"
+
 #define _GNU_SOURCE
+#include <assert.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <execinfo.h>
@@ -20,9 +23,11 @@ static void* (*real_calloc)(size_t nmemb, size_t size) = NULL;
 static void* (*real_malloc)(size_t size) = NULL;
 static void  (*real_free)(void* ptr) = NULL;
 static void* (*real_realloc)(void* ptr, size_t size) = NULL;
-static void* (*real_memalign)(size_t blocksize, size_t bytes) = NULL;
-// Ignoring obsolete methods like: valloc, pvalloc, (memalign is also obsolete)
-// TODO: consider adding aligned_alloc and posix_memalign (if have weak symbol)
+static void* (*real_aligned_alloc)(size_t alignment, size_t bytes) = NULL;
+static int (*real_posix_memalign)(void** ptr, size_t alignment, size_t bytes) = NULL;
+static void* (*real_memalign)(size_t alignment, size_t bytes) = NULL;
+// Ignoring obsolete methods: valloc, pvalloc, (memalign is also obsolete)
+// aligned_alloc and posix_memalign are not deprecated
 
 static int init_started = 0, init_completed = 0;
 
@@ -105,17 +110,10 @@ static void print_backtrace(const char* fmt, ...)
             log_message("-");
         log_message(" ");
     }
-    log_message("# Thread: %d, nested: %d\n", thread_id, thread_use);
+    log_message("* %d ", thread_id);
 
     if (fmt != NULL)
     {
-        if (thread_use > 1)
-        {
-            for (int i=1; i<thread_use; i++)
-                log_message("-");
-            log_message(" ");
-        }
-
         va_list ap;
         va_start(ap, fmt);
         log_message_v(fmt, &ap);
@@ -176,9 +174,23 @@ static void init()
     real_calloc   = dlsym(RTLD_NEXT, "calloc");
     real_realloc  = dlsym(RTLD_NEXT, "realloc");
     real_free     = dlsym(RTLD_NEXT, "free");
-    real_memalign = dlsym(RTLD_NEXT, "memalign");
 
-    if (!real_malloc || !real_free || !real_calloc || !real_realloc || !real_memalign)
+#if ENABLE_ALIGNED_ALLOC
+    real_aligned_alloc = dlsym(RTLD_NEXT, "aligned_alloc");
+    assert(real_aligned_alloc);
+#endif
+
+#if ENABLE_POSIX_MEMALIGN
+    real_posix_memalign = dlsym(RTLD_NEXT, "posix_memalign");
+    assert(real_posix_memalign);
+#endif
+
+#if ENABLE_MEMALIGN
+    real_memalign = dlsym(RTLD_NEXT, "memalign");
+    assert(real_memalign);
+#endif
+
+    if (!real_malloc || !real_free || !real_calloc || !real_realloc)
     {
         log_message("Error in `dlsym`: %s\n", dlerror());
         exit(1);
@@ -226,9 +238,23 @@ void* realloc(void* ptr, size_t size)
     return new_ptr;
 }
 
-// Workaround: on my laptop, loading a c++ app dsym during init() seems to require 1 calloc
-#define BOOTSTRAP_BUT_SIZE  1000
-static char bootup_buf[BOOTSTRAP_BUT_SIZE];
+// Workaround: loading a c++ app dsym during init() seems to require 1 calloc
+#define BOOTSTRAP_BUFFER_SIZE  1000
+static char bootstrap_buffer[BOOTSTRAP_BUFFER_SIZE];
+static int bootstrap_buffer_idx = 0;
+
+static void* bootstrap_calloc(size_t size)
+{
+    if (bootstrap_buffer_idx + size >= BOOTSTRAP_BUFFER_SIZE)
+    {
+        log_message("## Error: Failed to allocate %lu bytes\n", size);
+        exit(1);
+    }
+    void* ptr = bootstrap_buffer + bootstrap_buffer_idx;
+    bootstrap_buffer_idx += size;
+    return ptr;
+}
+
 void* calloc(size_t nmemb, size_t size)
 {
     if (real_calloc == NULL)
@@ -236,12 +262,7 @@ void* calloc(size_t nmemb, size_t size)
         if (thread_use > 0)
         {
             log_message("## Warning boostrap call calloc(%lu, %lu)\n", nmemb, size);
-            if (nmemb*size > BOOTSTRAP_BUT_SIZE)
-            {
-                log_message("## Error: not enough memory\n");
-                exit(1);
-            }
-            return bootup_buf;
+            return bootstrap_calloc(nmemb*size);
         }
         init();
     }
@@ -252,12 +273,41 @@ void* calloc(size_t nmemb, size_t size)
     return ptr;
 }
 
+#if ENABLE_ALIGNED_ALLOC
+void* aligned_alloc(size_t alignment, size_t bytes)
+{
+    if (real_aligned_alloc == NULL)
+        init();
+    void* ptr = real_aligned_alloc(alignment, bytes);
+
+    print_backtrace("aligned_alloc(%lu, %lu) = %p\n", alignment, bytes, ptr);
+    return ptr;
+}
+#endif
+
+#if ENABLE_POSIX_MEMALIGN
+int posix_memalign(void** ptr, size_t alignment, size_t bytes)
+{
+    if (real_aligned_alloc == NULL)
+        init();
+    int ret = real_posix_memalign(ptr, alignment, bytes);
+
+    if (ret != 0)
+        *ptr = NULL;
+    // Printing = ptr is easier to handle
+    print_backtrace("posix_memalign(%lu, %lu) = %p\n", alignment, bytes, *ptr);
+    return ret;
+}
+#endif
+
+#if ENABLE_MEMALIGN
 void* memalign(size_t blocksize, size_t bytes)
 {
     if (real_memalign == NULL)
         init();
     void* ptr = real_memalign(blocksize, bytes);
 
-    print_backtrace("memalign(%lu, %lu)\n", blocksize, bytes);
+    print_backtrace("memalign(%lu, %lu) = %p\n", blocksize, bytes, ptr);
     return ptr;
 }
+#endif
